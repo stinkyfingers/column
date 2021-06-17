@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"reflect"
+	"strings"
 	"text/tabwriter"
 )
 
@@ -14,36 +15,76 @@ type val struct {
 
 type valSet []val
 
-func Marshal(v interface{}) ([]byte, error) {
-	var valSets []valSet
+type valSets []valSet
 
-	value := reflect.ValueOf(v)
+func Marshal(v interface{}) ([]byte, error) {
+	return drillDownToStructOrSlice(reflect.ValueOf(v))
+}
+
+func drillDownToStructOrSlice(value reflect.Value) ([]byte, error) {
+	var buf bytes.Buffer
 	switch value.Kind() {
 	case reflect.Struct:
 		valSet := newValSet(value)
-		valSets = append(valSets, valSet)
+		b, err := valSet.marshal()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(b)
+
 	case reflect.Slice:
+		var vSets valSets
 		for i := 0; i < reflect.Value.Len(value); i++ {
 			valSet := newValSet(value.Index(i))
-			valSets = append(valSets, valSet)
+			vSets = append(vSets, valSet)
 		}
+		b, err := vSets.marshal()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(b)
+
 	case reflect.Ptr:
-		valSet := newValSet(value.Elem())
-		valSets = append(valSets, valSet)
+		return drillDownToStructOrSlice(value.Elem())
+
 	default:
 		return nil, fmt.Errorf("unsupported kind: %s", value.Kind())
 	}
+	return buf.Bytes(), nil
+}
 
-	// no data
-	if len(valSets) < 1 {
-		return nil, nil
+func (v *valSet) marshal() ([]byte, error) {
+	var buf bytes.Buffer
+	for _, val := range *v {
+		if val.value.Kind() == reflect.Slice || val.value.Kind() == reflect.Ptr {
+			b, err := drillDownToStructOrSlice(val.value)
+			if err != nil {
+				return nil, err
+			}
+			buf.Write(b)
+			continue
+		}
+		tag := val.tag.Get("column")
+
+		// omit?
+		if tag == "-" {
+			continue
+		}
+		fmt.Fprintf(&buf, "%s: %v\n", tag, val.value)
 	}
+	return buf.Bytes(), nil
+}
 
+func (vs *valSets) marshal() ([]byte, error) {
 	var buf bytes.Buffer
 	w := tabwriter.NewWriter(&buf, 0, 4, 4, ' ', 0)
 
+	if len(*vs) == 0 {
+		return nil, nil
+	}
+
 	// headers
-	for i, val := range valSets[0] {
+	for i, val := range (*vs)[0] {
 		tag := val.tag.Get("column")
 		// omit?
 		if tag == "-" {
@@ -52,14 +93,14 @@ func Marshal(v interface{}) ([]byte, error) {
 
 		fmt.Fprint(w, tag)
 		// tab
-		if i+1 < len(valSets[0]) {
+		if i+1 < len((*vs)[0]) {
 			fmt.Fprint(w, "\t")
 		}
 	}
 	fmt.Fprint(w, "\n")
 
 	// fields
-	for i, valSet := range valSets {
+	for i, valSet := range *vs {
 		for j, val := range valSet {
 			// omit?
 			if val.tag.Get("column") == "-" {
@@ -75,7 +116,7 @@ func Marshal(v interface{}) ([]byte, error) {
 			}
 		}
 		// newline
-		if i+1 < len(valSets) {
+		if i+1 < len(*vs) {
 			fmt.Fprint(w, "\n")
 		}
 	}
@@ -89,12 +130,29 @@ func Marshal(v interface{}) ([]byte, error) {
 
 // newValSet iterates over a value's fields and assigns the Value and StructTag to a valSet
 func newValSet(value reflect.Value) valSet {
+	if value.Kind() == reflect.Ptr {
+		value = value.Elem()
+	}
+
 	var valSet valSet
 	for i := 0; i < value.NumField(); i++ {
 		tag := value.Type().Field(i).Tag
 		// use Field Type as StructTag
 		if tag.Get("column") == "" {
-			tag = reflect.StructTag(fmt.Sprintf("column:\"%s\"", value.Type().Field(i).Name))
+			fieldName := value.Type().Field(i).Name
+			// split and uppercase field name
+			var builder strings.Builder
+			for i, r := range fieldName {
+				if r > 96 && r < 123 {
+					builder.WriteString(string(r - 32))
+				} else {
+					if i > 0 {
+						builder.WriteString(" ")
+					}
+					builder.WriteString(string(r))
+				}
+			}
+			tag = reflect.StructTag(fmt.Sprintf("column:\"%s\"", builder.String()))
 		}
 		valSet = append(valSet, val{tag: tag, value: value.Field(i)})
 	}

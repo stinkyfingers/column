@@ -6,11 +6,17 @@ import (
 )
 
 type Happy struct {
-	Name      string `column:"name"`
-	Value     int    `column:"VALUE"`
-	Unlabeled float64
-	Omit      string `column:"-"`
+	Name          string `column:"name"`
+	Value         int    `column:"VALUE"`
+	UnlabeledData float64
+	Omit          string `column:"-"`
+	Sads          []Sad
 	// TODO implement omitempty
+}
+
+type Sad struct {
+	Name string
+	Data int
 }
 
 func TestMarshal(t *testing.T) {
@@ -21,8 +27,8 @@ func TestMarshal(t *testing.T) {
 		description string
 	}{
 		{
-			v:           Happy{Name: "test", Value: 2, Unlabeled: 3.1},
-			expected:    []byte("name    VALUE    Unlabeled    \ntest    2        3.1"),
+			v:           Happy{Name: "test", Value: 2, UnlabeledData: 3.1, Sads: []Sad{{Name: "test", Data: 3}}},
+			expected:    []byte("name: test\nVALUE: 2\nUNLABELED DATA: 3.1\nNAME    DATA\ntest    3"),
 			description: "struct",
 		},
 		{
@@ -31,13 +37,31 @@ func TestMarshal(t *testing.T) {
 			}, {
 				Name: "test-2", Value: 3,
 			}},
-			expected:    []byte("name      VALUE    Unlabeled    \ntest      2        0            \ntest-2    3        0"),
+			expected:    []byte("name      VALUE    UNLABELED DATA    SADS\ntest      2        0                 []\ntest-2    3        0                 []"),
 			description: "slice",
 		},
 		{
 			v:           &Happy{Name: "test", Value: 2},
-			expected:    []byte("name    VALUE    Unlabeled    \ntest    2        0"),
+			expected:    []byte("name: test\nVALUE: 2\nUNLABELED DATA: 0\n"),
 			description: "pointer",
+		},
+		{
+			v: []*Happy{{
+				Name: "test", Value: 2,
+			}, {
+				Name: "test-2", Value: 3,
+			}},
+			expected:    []byte("name      VALUE    UNLABELED DATA    SADS\ntest      2        0                 []\ntest-2    3        0                 []"),
+			description: "slice",
+		},
+		{
+			v: &[]Happy{{
+				Name: "test", Value: 2,
+			}, {
+				Name: "test-2", Value: 3,
+			}},
+			expected:    []byte("name      VALUE    UNLABELED DATA    SADS\ntest      2        0                 []\ntest-2    3        0                 []"),
+			description: "slice",
 		},
 	}
 	for _, test := range tests {
